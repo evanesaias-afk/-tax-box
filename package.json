@@ -1,20 +1,18 @@
 {
-  "name": "tax-box",
+  "name": "earn-tax-bot",
   "version": "1.0.0",
-  "description": "Discord bot for tax/box system",
-  "main": "src/index.js",
+  "description": "Bot for tracking spending and taxes",
+  "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node index.js",
     "build": "echo 'no build step'"
   },
   "dependencies": {
     "discord.js": "^14.15.3",
-    "dotenv": "^16.4.5",
-    "fs-extra": "^11.2.0"
+    "dotenv": "^16.4.5"
   },
   "engines": {
     "node": ">=18.x"
-  },
-  "license": "MIT"
+  }
 }
