@@ -1,127 +1,120 @@
-import fs from 'fs';
-import path from 'path';
+// index.js — Tax Box Bot (Node 18+ / ES Module)
+
 import 'dotenv/config';
 import {
   Client,
   GatewayIntentBits,
   EmbedBuilder,
-  SlashCommandBuilder,
   REST,
-  Routes
+  Routes,
+  SlashCommandBuilder,
 } from 'discord.js';
+import cron from 'node-cron';
 
-/* ---------------- CONFIG ---------------- */
+// ---------------- CONFIG ----------------
+const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID  = process.env.GUILD_ID;
-const TOKEN     = process.env.TOKEN;
+const GUILD_ID = process.env.GUILD_ID;
 
-const TIER_ROLES = [
-  { min: 1,    roleId: '1404316149486714991', name: 'Classic Customer' },
-  { min: 100,  roleId: '1404377665766555689', name: 'VIP Customer' },
-  { min: 250,  roleId: '1404316539057995878', name: 'Deluxe Customer' },
-  { min: 500,  roleId: '1404316641805734021', name: 'Prestige Customer' },
-  { min: 1000, roleId: '1404316734998970378', name: 'Titan Customer' }
-];
+const TAX_PERCENT = 25; // hard-coded
+const SELLER_ROLE_ID = process.env.SELLER_ROLE_ID; // role ID for sellers
 
-const DATA_DIR = path.resolve('data');
-const ECON_PATH = path.join(DATA_DIR, 'economy.json');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(ECON_PATH)) fs.writeFileSync(ECON_PATH, JSON.stringify({ users: {}, taxes: {} }, null, 2));
-
-function loadData() {
-  return JSON.parse(fs.readFileSync(ECON_PATH, 'utf8'));
-}
-function saveData(d) {
-  fs.writeFileSync(ECON_PATH, JSON.stringify(d, null, 2));
-}
-
-/* ---------------- CLIENT ---------------- */
+// ----------------------------------------
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-/* ---------------- COMMANDS ---------------- */
+// Register slash commands
 const commands = [
   new SlashCommandBuilder()
-    .setName('earn')
-    .setDescription('Log a customer purchase and track seller tax')
-    .addUserOption(opt => opt.setName('customer').setDescription('Customer').setRequired(true))
-    .addUserOption(opt => opt.setName('seller').setDescription('Seller').setRequired(true))
-    .addIntegerOption(opt => opt.setName('amount').setDescription('Coins spent').setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName('checkspend')
-    .setDescription('Check how much a customer has spent')
-    .addUserOption(opt => opt.setName('customer').setDescription('Customer').setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName('checktax')
-    .setDescription('Check pending tax owed for a seller')
-    .addUserOption(opt => opt.setName('seller').setDescription('Seller').setRequired(true))
-].map(c => c.toJSON());
+    .setName('pay')
+    .setDescription('Log a payment with tax applied')
+    .addUserOption(opt =>
+      opt.setName('seller').setDescription('Seller').setRequired(true)
+    )
+    .addIntegerOption(opt =>
+      opt.setName('amount').setDescription('Amount paid').setRequired(true)
+    ),
+];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
-(async () => {
+
+async function registerCommands() {
   try {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
+      body: commands,
+    });
     console.log('✅ Commands registered');
   } catch (err) {
     console.error(err);
   }
-})();
+}
 
-/* ---------------- HANDLERS ---------------- */
-client.on('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
-
+// Handle interactions
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  const data = loadData();
 
-  if (interaction.commandName === 'earn') {
-    const customer = interaction.options.getUser('customer');
-    const seller   = interaction.options.getUser('seller');
-    const amount   = interaction.options.getInteger('amount');
-
-    // Update customer spend
-    if (!data.users[customer.id]) data.users[customer.id] = { spent: 0 };
-    data.users[customer.id].spent += amount;
-
-    // Auto role based on spend
-    const member = await interaction.guild.members.fetch(customer.id);
-    for (let tier of TIER_ROLES) {
-      if (data.users[customer.id].spent >= tier.min) {
-        if (!member.roles.cache.has(tier.roleId)) {
-          await member.roles.add(tier.roleId);
-        }
-      }
-    }
-
-    // Update seller tax
-    if (!data.taxes[seller.id]) data.taxes[seller.id] = { owed: 0 };
-    const tax = Math.floor(amount * 0.25);
-    data.taxes[seller.id].owed += tax;
-
-    saveData(data);
+  if (interaction.commandName === 'pay') {
+    const seller = interaction.options.getUser('seller');
+    const amount = interaction.options.getInteger('amount');
+    const tax = Math.floor(amount * (TAX_PERCENT / 100));
+    const net = amount - tax;
 
     const embed = new EmbedBuilder()
-      .setTitle('Transaction Logged')
-      .setDescription(`${customer} spent **${amount}** coins.\nSeller ${seller} taxed **${tax}** coins.`)
-      .setColor(0x5865F2);
+      .setTitle('💰 Transaction Logged')
+      .setDescription(
+        `<@${interaction.user.id}> paid **${amount}** coins.\n` +
+        `Seller <@${seller.id}> taxed **${tax}** coins (25%).\n` +
+        `Seller receives **${net}** coins.`
+      )
+      .setColor(0x00AE86);
 
-    await interaction.reply({ embeds: [embed], ephemeral: false });
-  }
-
-  if (interaction.commandName === 'checkspend') {
-    const customer = interaction.options.getUser('customer');
-    const spent = data.users[customer.id]?.spent || 0;
-    await interaction.reply(`${customer} has spent **${spent}** coins.`);
-  }
-
-  if (interaction.commandName === 'checktax') {
-    const seller = interaction.options.getUser('seller');
-    const owed = data.taxes[seller.id]?.owed || 0;
-    await interaction.reply(`${seller} currently owes **${owed}** coins in taxes.`);
+    try {
+      await interaction.reply({ embeds: [embed], ephemeral: false });
+    } catch (err) {
+      console.error(err);
+    }
   }
 });
 
+// ---------------- WEEKLY TAX DMS ----------------
+async function sendWeeklyTaxDMs() {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    await guild.members.fetch(); // load all members
+
+    const sellers = guild.members.cache.filter(m =>
+      m.roles.cache.has(SELLER_ROLE_ID)
+    );
+
+    for (const [, member] of sellers) {
+      try {
+        await member.send(
+          `📢 Reminder: A **${TAX_PERCENT}% tax** applies to all OOG trades.\n` +
+          `This is your weekly notice — please log your trades honestly.`
+        );
+        console.log(`✅ Sent tax DM to ${member.user.tag}`);
+      } catch {
+        console.warn(`⚠️ Could not DM ${member.user.tag}`);
+      }
+    }
+  } catch (err) {
+    console.error('Error sending weekly tax DMs:', err);
+  }
+}
+
+// Runs every Sunday at 11 AM CST
+cron.schedule('0 11 * * 0', () => {
+  console.log('⏰ Weekly tax DM job triggered');
+  sendWeeklyTaxDMs();
+}, {
+  timezone: process.env.TIMEZONE || 'America/Chicago',
+});
+
+// ---------------- LOGIN ----------------
+client.once('ready', () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+});
+
+registerCommands();
 client.login(TOKEN);
