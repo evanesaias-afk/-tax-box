@@ -1,148 +1,146 @@
-// index.js — ES Module (Node 18+)
+// index.js — Economy + Tax Bot with Seller Tax List
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import "dotenv/config";
 import {
   Client,
   GatewayIntentBits,
-  Partials,
   SlashCommandBuilder,
-  Routes,
   REST,
-  EmbedBuilder
+  Routes,
+  EmbedBuilder,
 } from "discord.js";
 import cron from "node-cron";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+});
 
-/* =========================== CONFIG =========================== */
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID  = process.env.GUILD_ID;
-const TOKEN     = process.env.TOKEN;
+/* ================== CONFIG ================== */
+const DATA_DIR = path.resolve("data");
+const ECON_PATH = path.join(DATA_DIR, "economy.json");
 
-const REVIEW_CHANNEL_ID = "YOUR_REVIEW_CHANNEL_ID";
-const SELLER_ROLE_ID    = "YOUR_SELLER_ROLE_ID";
+const TAX_RATE = 0.25; // 25% hardcoded
+const SELLER_ROLE_ID = "1396594120499400807"; // your seller role
 
-// Earnings → tier roles
-const TIER_ROLES = [
-  { min: 100,  roleId: "CLASSIC_ROLE_ID" },
-  { min: 250,  roleId: "VIP_ROLE_ID" },
-  { min: 500,  roleId: "DELUXE_ROLE_ID" },
-  { min: 1000, roleId: "PRESTIGE_ROLE_ID" }
-];
-
-const TAX_RATE = 25; // 25% hard-coded
-const ECON_PATH = path.join(__dirname, "economy.json");
-
-/* =========================== STORAGE =========================== */
-function ensureEconomy() {
+/* ================ STORAGE ================ */
+function ensureData() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(ECON_PATH)) {
-    fs.writeFileSync(ECON_PATH, JSON.stringify({ users: {} }, null, 2));
+    fs.writeFileSync(
+      ECON_PATH,
+      JSON.stringify({ users: {}, taxes: {} }, null, 2)
+    );
   }
 }
-function loadEconomy() {
-  ensureEconomy();
+function loadData() {
+  ensureData();
   return JSON.parse(fs.readFileSync(ECON_PATH, "utf8"));
 }
-function saveEconomy(d) {
+function saveData(d) {
   fs.writeFileSync(ECON_PATH, JSON.stringify(d, null, 2));
 }
 
-/* =========================== DISCORD CLIENT =========================== */
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
-  partials: [Partials.Channel]
-});
-
+/* ================ COMMANDS ================ */
 const commands = [
   new SlashCommandBuilder()
     .setName("earn")
-    .setDescription("Log earnings (also records customer spending)")
-    .addUserOption(o => o.setName("customer").setDescription("Customer").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setDescription("Amount earned").setRequired(true)),
+    .setDescription("Log seller earnings and apply 25% tax")
+    .addUserOption((o) =>
+      o.setName("seller").setDescription("Seller").setRequired(true)
+    )
+    .addIntegerOption((o) =>
+      o.setName("amount").setDescription("Earnings amount").setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("checkspend")
-    .setDescription("Check your total spending"),
+    .setDescription("Check your spend/earn log"),
 
   new SlashCommandBuilder()
-    .setName("review")
-    .setDescription("Submit a review")
-    .addStringOption(o => o.setName("text").setDescription("Your review").setRequired(true))
-].map(c => c.toJSON());
+    .setName("taxlist")
+    .setDescription("See how much tax each seller owes"),
+];
 
+/* ================ REGISTER ================= */
 async function registerCommands() {
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-  console.log("✅ Slash commands registered.");
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+  await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
+    body: commands.map((c) => c.toJSON()),
+  });
+  console.log("✅ Commands registered.");
 }
 
-/* =========================== COMMAND HANDLING =========================== */
-client.on("interactionCreate", async interaction => {
+/* ================ COMMAND HANDLER ================= */
+client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  const eco = loadEconomy();
-  const userId = interaction.user.id;
+  const data = loadData();
 
   if (interaction.commandName === "earn") {
+    const seller = interaction.options.getUser("seller");
     const amount = interaction.options.getInteger("amount");
-    const customer = interaction.options.getUser("customer");
 
-    // seller tracking
-    if (!eco.users[userId]) eco.users[userId] = { earned: 0, spent: 0 };
-    eco.users[userId].earned += amount;
+    if (!data.users[seller.id]) data.users[seller.id] = { earned: 0, taxed: 0 };
 
-    // customer spending tracking
-    if (!eco.users[customer.id]) eco.users[customer.id] = { earned: 0, spent: 0 };
-    eco.users[customer.id].spent += amount;
+    const tax = Math.floor(amount * TAX_RATE);
+    const net = amount - tax;
 
-    saveEconomy(eco);
+    data.users[seller.id].earned += net;
+    data.users[seller.id].taxed += tax;
 
-    // assign tier roles to seller
-    const member = await interaction.guild.members.fetch(userId);
-    for (const tier of TIER_ROLES) {
-      if (eco.users[userId].earned >= tier.min) {
-        await member.roles.add(tier.roleId).catch(() => {});
+    saveData(data);
+
+    await interaction.reply(
+      `💰 ${seller.username} earned **${net}** after 25% tax (**${tax}** taken).`
+    );
+  }
+
+  if (interaction.commandName === "checkspend") {
+    const user = interaction.user;
+    const record = data.users[user.id] || { earned: 0, taxed: 0 };
+    await interaction.reply(
+      `📊 ${user.username} — Earned: **${record.earned}**, Tax Paid: **${record.taxed}**`
+    );
+  }
+
+  if (interaction.commandName === "taxlist") {
+    let desc = "";
+    for (const [id, rec] of Object.entries(data.users)) {
+      desc += `<@${id}> — Tax Owed: **${rec.taxed}**\n`;
+    }
+    if (!desc) desc = "No sellers with taxes logged.";
+    const embed = new EmbedBuilder()
+      .setTitle("📜 Seller Tax List")
+      .setDescription(desc)
+      .setColor(0x5865f2);
+
+    await interaction.reply({ embeds: [embed] });
+  }
+});
+
+/* ================ CRON DM ================= */
+client.on("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  // Every Sunday at 11:00 AM CST
+  cron.schedule("0 11 * * 0", async () => {
+    const guild = client.guilds.cache.first();
+    const data = loadData();
+
+    const sellers = guild.roles.cache.get(SELLER_ROLE_ID)?.members;
+    if (!sellers) return;
+
+    sellers.forEach(async (member) => {
+      const rec = data.users[member.id] || { earned: 0, taxed: 0 };
+      try {
+        await member.send(
+          `📢 Weekly Seller Report:\nEarned: **${rec.earned}**\nTax Paid: **${rec.taxed}**`
+        );
+      } catch (err) {
+        console.log(`❌ Could not DM ${member.user.tag}`);
       }
-    }
-
-    await interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("💰 Earnings Logged")
-          .setDescription(`${interaction.user} earned **${amount}** coins from ${customer}. Tax is **${TAX_RATE}%**.\n\n📊 ${customer.username} has now spent **${eco.users[customer.id].spent}** total.`)
-          .setColor(0x00ff99)
-      ]
     });
-
-  } else if (interaction.commandName === "checkspend") {
-    const spent = eco.users[userId]?.spent || 0;
-    await interaction.reply(`🧾 You have spent **${spent}** coins total.`);
-
-  } else if (interaction.commandName === "review") {
-    const text = interaction.options.getString("text");
-    const channel = await client.channels.fetch(REVIEW_CHANNEL_ID);
-    channel.send({ embeds: [new EmbedBuilder().setTitle("📢 New Review").setDescription(text).setFooter({ text: interaction.user.username })] });
-    await interaction.reply("✅ Review submitted!");
-  }
+  }, { timezone: "America/Chicago" });
 });
 
-/* =========================== SUNDAY DM =========================== */
-// Every Sunday at 11 AM CST
-cron.schedule("0 11 * * 0", async () => {
-  const eco = loadEconomy();
-  for (const id of Object.keys(eco.users)) {
-    const member = await client.users.fetch(id).catch(() => null);
-    if (member) {
-      member.send(`📊 Weekly reminder: All seller trades have a **${TAX_RATE}%** tax.`).catch(() => {});
-    }
-  }
-}, { timezone: "America/Chicago" });
-
-/* =========================== LOGIN =========================== */
-client.once("ready", () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-});
-await registerCommands();
-client.login(TOKEN);
+client.login(process.env.TOKEN);
