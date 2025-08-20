@@ -1,19 +1,18 @@
 {
-  "name": "tax-box-bot",
+  "name": "tax-earn-bot",
   "version": "1.0.0",
-  "description": "Discord tax box bot",
+  "description": "Forgotten Traders tax + earn tracking bot",
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js",
-    "build": "echo 'Nothing to build'"
+    "start": "node index.js"
   },
   "engines": {
     "node": "20.x"
   },
   "dependencies": {
-    "discord.js": "^14.16.3",
+    "discord.js": "^14.15.3",
     "dotenv": "^16.4.5",
-    "node-cron": "^3.0.3"
+    "node-schedule": "^2.1.1"
   }
 }
