@@ -1,5 +1,3 @@
-/* =========================== index.js =========================== */
-
 import fs from 'fs';
 import path from 'path';
 import 'dotenv/config';
@@ -9,16 +7,13 @@ import {
   EmbedBuilder,
   SlashCommandBuilder,
   REST,
-  Routes,
-  PermissionsBitField
+  Routes
 } from 'discord.js';
 
 /* ---------------- CONFIG ---------------- */
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID  = process.env.GUILD_ID;
 const TOKEN     = process.env.TOKEN;
-
-const SELLER_ROLE_ID = '1396594120499400807';
 
 const TIER_ROLES = [
   { min: 1,    roleId: '1404316149486714991', name: 'Classic Customer' },
@@ -30,7 +25,7 @@ const TIER_ROLES = [
 
 const DATA_DIR = path.resolve('data');
 const ECON_PATH = path.join(DATA_DIR, 'economy.json');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(ECON_PATH)) fs.writeFileSync(ECON_PATH, JSON.stringify({ users: {}, taxes: {} }, null, 2));
 
 function loadData() {
@@ -69,14 +64,14 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
   try {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log('Commands registered');
+    console.log('✅ Commands registered');
   } catch (err) {
     console.error(err);
   }
 })();
 
 /* ---------------- HANDLERS ---------------- */
-client.on('ready', () => console.log(`Logged in as ${client.user.tag}`));
+client.on('ready', () => console.log(`🤖 Logged in as ${client.user.tag}`));
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -110,7 +105,7 @@ client.on('interactionCreate', async (interaction) => {
 
     const embed = new EmbedBuilder()
       .setTitle('Transaction Logged')
-      .setDescription(`${customer} spent **${amount}** coins. Seller ${seller} taxed **${tax}** coins.`)
+      .setDescription(`${customer} spent **${amount}** coins.\nSeller ${seller} taxed **${tax}** coins.`)
       .setColor(0x5865F2);
 
     await interaction.reply({ embeds: [embed], ephemeral: false });
@@ -130,32 +125,3 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(TOKEN);
-
-/* =========================== package.json =========================== */
-{
-  "name": "earn-tax-bot",
-  "version": "1.0.0",
-  "description": "Bot for tracking spending and taxes",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "discord.js": "^14.15.3",
-    "dotenv": "^16.4.5"
-  }
-}
-
-/* =========================== config.json =========================== */
-{
-  "clientId": "YOUR_CLIENT_ID",
-  "guildId": "YOUR_GUILD_ID",
-  "token": "YOUR_BOT_TOKEN"
-}
-
-/* =========================== economy.json (initial) =========================== */
-{
-  "users": {},
-  "taxes": {}
-}
