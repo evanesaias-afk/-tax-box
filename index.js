@@ -1,161 +1,88 @@
-// index.js — ES Module (Node 18+)
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-import "dotenv/config";
+// index.js — Economy Bot
+import 'dotenv/config';
 import {
   Client,
   GatewayIntentBits,
-  Partials,
-  ChannelType,
-  EmbedBuilder,
   SlashCommandBuilder,
-  Routes,
   REST,
-  PermissionsBitField,
-} from "discord.js";
+  Routes,
+  PermissionFlagsBits
+} from 'discord.js';
+import fs from 'fs';
+import path from 'path';
 
-/* =========================== CONFIG =========================== */
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// ==== HARDCODED ROLES ====
+const SELLER_ROLE = "1396594120499400807";
+const CLASSIC = "1404316149486714991";
+const VIP = "1404317193667219611";
+const DELUXE = "1404316641805734021";
+const PRESTIGE = "1404316734998970378";
 
-// Data storage
-const DATA_DIR = path.resolve("data");
-const ECON_PATH = path.join(DATA_DIR, "economy.json");
+const DATA_FILE = path.resolve('economy.json');
+if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({}));
 
-// Colors
-const FT_BLUE = 0x5865f2;
+function loadData() { return JSON.parse(fs.readFileSync(DATA_FILE)); }
+function saveData(d) { fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2)); }
 
-// Role IDs
-const CLASSIC_ROLE = "1404316149486714991"; // classic customer
-
-/* =========================== UTILS =========================== */
-function ensureData() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(ECON_PATH)) {
-    fs.writeFileSync(
-      ECON_PATH,
-      JSON.stringify({ users: {}, taxes: {}, taxPending: {} }, null, 2)
-    );
-  }
-}
-function loadData() {
-  ensureData();
-  return JSON.parse(fs.readFileSync(ECON_PATH, "utf8"));
-}
-function saveData(d) {
-  fs.writeFileSync(ECON_PATH, JSON.stringify(d, null, 2));
-}
-
-/* =========================== CLIENT =========================== */
-if (!process.env.TOKEN) {
-  console.error("❌ Missing Discord bot TOKEN environment variable!");
-  process.exit(1);
-}
-
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages,
-  ],
-  partials: [Partials.Channel],
-});
-
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
-
-/* =========================== COMMANDS =========================== */
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 
 const commands = [
   new SlashCommandBuilder()
-    .setName("earn")
-    .setDescription("Log a trade earning")
-    .addUserOption((opt) =>
-      opt.setName("customer").setDescription("Customer").setRequired(true)
-    )
-    .addIntegerOption((opt) =>
-      opt.setName("amount").setDescription("Earnings amount").setRequired(true)
-    ),
+    .setName('earn')
+    .setDescription('Log a customer earning')
+    .addUserOption(opt => opt.setName('customer').setDescription('Customer').setRequired(true))
+    .addIntegerOption(opt => opt.setName('amount').setDescription('Amount spent').setRequired(true))
+    .addUserOption(opt => opt.setName('seller').setDescription('Seller').setRequired(true)),
 
   new SlashCommandBuilder()
-    .setName("tax")
-    .setDescription("Send tax reminder DM")
-    .addUserOption((opt) =>
-      opt.setName("user").setDescription("Who to DM").setRequired(true)
-    ),
-].map((c) => c.toJSON());
+    .setName('tax')
+    .setDescription('Log a tax payment')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+].map(c => c.toJSON());
 
+const rest = new REST({ version: '10' }).setToken(TOKEN);
 async function registerCommands() {
-  try {
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
-      body: commands,
-    });
-    console.log("✅ Slash commands registered.");
-  } catch (err) {
-    console.error("❌ Failed to register commands:", err);
-  }
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+  console.log("Economy bot commands registered ✅");
 }
 
-/* =========================== HANDLERS =========================== */
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isCommand()) return;
 
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  registerCommands();
-});
+  if (interaction.commandName === 'earn') {
+    const sellerMember = await interaction.guild.members.fetch(interaction.user.id);
+    if (!sellerMember.roles.cache.has(SELLER_ROLE)) {
+      return interaction.reply({ content: "❌ Only sellers can use this.", ephemeral: true });
+    }
 
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+    const customer = interaction.options.getUser('customer');
+    const amount = interaction.options.getInteger('amount');
+    const seller = interaction.options.getUser('seller');
 
-  const data = loadData();
-
-  if (interaction.commandName === "earn") {
-    const customer = interaction.options.getUser("customer");
-    const amount = interaction.options.getInteger("amount");
-
-    if (!data.users[customer.id]) data.users[customer.id] = { earned: 0 };
-    data.users[customer.id].earned += amount;
+    const data = loadData();
+    if (!data[customer.id]) data[customer.id] = 0;
+    data[customer.id] += amount;
     saveData(data);
 
-    // Role auto assign
+    // Role assignment
     const member = await interaction.guild.members.fetch(customer.id);
-    if (!member.roles.cache.has(CLASSIC_ROLE)) {
-      await member.roles.add(CLASSIC_ROLE);
-    }
+    if (data[customer.id] >= 1000) await member.roles.add(PRESTIGE);
+    else if (data[customer.id] >= 500) await member.roles.add(DELUXE);
+    else if (data[customer.id] >= 250) await member.roles.add(VIP);
+    else if (data[customer.id] >= 1) await member.roles.add(CLASSIC);
 
-    await interaction.reply({
-      content: `✅ Logged **${amount}** earnings for ${customer}.`,
-      ephemeral: true,
-    });
+    await interaction.reply(`💰 Logged **${amount}** spent by ${customer.tag} (Seller: ${seller.tag})`);
   }
 
-  if (interaction.commandName === "tax") {
-    const target = interaction.options.getUser("user");
-    const embed = new EmbedBuilder()
-      .setColor(FT_BLUE)
-      .setTitle("📌 Tax Reminder")
-      .setDescription("Please remember to submit your weekly tax screenshot!")
-      .setImage(
-        "https://cdn.discordapp.com/attachments/1404360337079271504/1406132875551703113/tax-reminder.gif"
-      )
-      .setFooter({ text: "Forgotten Traders" });
-
-    try {
-      await target.send({ embeds: [embed] });
-      await interaction.reply({
-        content: `✅ Tax reminder sent to ${target.tag}.`,
-        ephemeral: true,
-      });
-    } catch (err) {
-      await interaction.reply({
-        content: `❌ Could not DM ${target.tag}.`,
-        ephemeral: true,
-      });
-    }
+  if (interaction.commandName === 'tax') {
+    await interaction.reply("✅ Tax logged (Admin only).");
   }
 });
 
-/* =========================== LOGIN =========================== */
-client.login(process.env.TOKEN);
+client.once('ready', () => console.log(`Economy Bot logged in as ${client.user.tag}`));
+registerCommands();
+client.login(TOKEN);
