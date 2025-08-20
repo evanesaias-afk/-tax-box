@@ -22,10 +22,10 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID  = process.env.GUILD_ID;
 const TOKEN     = process.env.TOKEN;
 
-// Roles (replace with your IDs)
 const REVIEW_CHANNEL_ID = "YOUR_REVIEW_CHANNEL_ID";
 const SELLER_ROLE_ID    = "YOUR_SELLER_ROLE_ID";
 
+// Earnings → tier roles
 const TIER_ROLES = [
   { min: 100,  roleId: "CLASSIC_ROLE_ID" },
   { min: 250,  roleId: "VIP_ROLE_ID" },
@@ -59,7 +59,7 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder()
     .setName("earn")
-    .setDescription("Log earnings")
+    .setDescription("Log earnings (also records customer spending)")
     .addUserOption(o => o.setName("customer").setDescription("Customer").setRequired(true))
     .addIntegerOption(o => o.setName("amount").setDescription("Amount earned").setRequired(true)),
 
@@ -89,11 +89,17 @@ client.on("interactionCreate", async interaction => {
     const amount = interaction.options.getInteger("amount");
     const customer = interaction.options.getUser("customer");
 
+    // seller tracking
     if (!eco.users[userId]) eco.users[userId] = { earned: 0, spent: 0 };
     eco.users[userId].earned += amount;
+
+    // customer spending tracking
+    if (!eco.users[customer.id]) eco.users[customer.id] = { earned: 0, spent: 0 };
+    eco.users[customer.id].spent += amount;
+
     saveEconomy(eco);
 
-    // Assign tier role
+    // assign tier roles to seller
     const member = await interaction.guild.members.fetch(userId);
     for (const tier of TIER_ROLES) {
       if (eco.users[userId].earned >= tier.min) {
@@ -105,7 +111,7 @@ client.on("interactionCreate", async interaction => {
       embeds: [
         new EmbedBuilder()
           .setTitle("💰 Earnings Logged")
-          .setDescription(`${interaction.user} earned **${amount}** coins from ${customer}. Tax is **${TAX_RATE}%**.`)
+          .setDescription(`${interaction.user} earned **${amount}** coins from ${customer}. Tax is **${TAX_RATE}%**.\n\n📊 ${customer.username} has now spent **${eco.users[customer.id].spent}** total.`)
           .setColor(0x00ff99)
       ]
     });
