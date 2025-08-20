@@ -14,150 +14,94 @@ import {
   REST,
   PermissionsBitField,
 } from "discord.js";
-import cron from "node-cron";
 
-/* ================= CONFIG ================= */
+/* =========================== CONFIG =========================== */
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.join(__dirname, "data");
+// Data storage
+const DATA_DIR = path.resolve("data");
 const ECON_PATH = path.join(DATA_DIR, "economy.json");
 
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
-const TOKEN = process.env.TOKEN;
+// Colors
+const FT_BLUE = 0x5865f2;
 
-const SELLER_ROLE_ID = process.env.SELLER_ROLE_ID;
-const TAX_PERCENT = parseInt(process.env.TAX_PERCENT || "25");
-const TIMEZONE = process.env.TIMEZONE || "America/Chicago";
+// Role IDs
+const CLASSIC_ROLE = "1404316149486714991"; // classic customer
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-if (!fs.existsSync(ECON_PATH))
-  fs.writeFileSync(ECON_PATH, JSON.stringify({ users: {}, sellers: {} }, null, 2));
+/* =========================== UTILS =========================== */
+function ensureData() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(ECON_PATH)) {
+    fs.writeFileSync(
+      ECON_PATH,
+      JSON.stringify({ users: {}, taxes: {}, taxPending: {} }, null, 2)
+    );
+  }
+}
+function loadData() {
+  ensureData();
+  return JSON.parse(fs.readFileSync(ECON_PATH, "utf8"));
+}
+function saveData(d) {
+  fs.writeFileSync(ECON_PATH, JSON.stringify(d, null, 2));
+}
 
-const loadEconomy = () => JSON.parse(fs.readFileSync(ECON_PATH));
-const saveEconomy = (data) => fs.writeFileSync(ECON_PATH, JSON.stringify(data, null, 2));
+/* =========================== CLIENT =========================== */
+if (!process.env.TOKEN) {
+  console.error("❌ Missing Discord bot TOKEN environment variable!");
+  process.exit(1);
+}
 
-/* ================= CLIENT ================= */
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
+  ],
   partials: [Partials.Channel],
 });
 
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-/* ================= COMMANDS ================= */
+/* =========================== COMMANDS =========================== */
+
 const commands = [
   new SlashCommandBuilder()
     .setName("earn")
-    .setDescription("Log a customer's purchase & seller's earnings (auto-taxed).")
+    .setDescription("Log a trade earning")
     .addUserOption((opt) =>
-      opt.setName("customer").setDescription("The customer").setRequired(true)
+      opt.setName("customer").setDescription("Customer").setRequired(true)
     )
     .addIntegerOption((opt) =>
-      opt.setName("amount").setDescription("Amount earned before tax").setRequired(true)
+      opt.setName("amount").setDescription("Earnings amount").setRequired(true)
     ),
 
   new SlashCommandBuilder()
-    .setName("forcetax")
-    .setDescription("Force send the weekly tax reminder DM (admin only).")
-];
+    .setName("tax")
+    .setDescription("Send tax reminder DM")
+    .addUserOption((opt) =>
+      opt.setName("user").setDescription("Who to DM").setRequired(true)
+    ),
+].map((c) => c.toJSON());
 
-/* ================= REGISTER ================= */
 async function registerCommands() {
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
-    body: commands,
-  });
-  console.log("✅ Slash commands registered.");
-}
-
-/* ================= /EARN ================= */
-async function handleEarn(interaction) {
-  const member = interaction.member;
-  if (!member.roles.cache.has(SELLER_ROLE_ID)) {
-    await interaction.reply({ content: "❌ You must be a Seller to use this command.", ephemeral: true });
-    return;
-  }
-
-  const customer = interaction.options.getUser("customer");
-  const amount = interaction.options.getInteger("amount");
-
-  const tax = Math.floor((amount * TAX_PERCENT) / 100);
-  const sellerTake = amount - tax;
-
-  const data = loadEconomy();
-  // track customer spend
-  if (!data.users[customer.id]) data.users[customer.id] = { spent: 0 };
-  data.users[customer.id].spent += amount;
-
-  // track seller earnings
-  if (!data.sellers[member.id]) data.sellers[member.id] = { owed: 0, earned: 0 };
-  data.sellers[member.id].earned += sellerTake;
-  data.sellers[member.id].owed += tax;
-
-  saveEconomy(data);
-
-  const embed = new EmbedBuilder()
-    .setTitle("💰 Earnings Logged")
-    .setDescription(
-      `**Customer:** ${customer}\n**Amount:** ${amount} 🪙\n**Tax (${TAX_PERCENT}%):** ${tax} 🪙\n**You keep:** ${sellerTake} 🪙`
-    )
-    .setColor(0x00ae86);
-
-  await interaction.reply({ embeds: [embed] });
-}
-
-/* ================= TAX DM ================= */
-async function sendTaxDM(userId, owed) {
   try {
-    const user = await client.users.fetch(userId);
-
-    const embed = new EmbedBuilder()
-      .setTitle("📢 Tax Reminder")
-      .setDescription(
-        `You currently owe **${owed} 🪙** in taxes to **Forgotten Traders**.\n\n` +
-        `**How to pay**\n• PayPal: Videogameenjoyer\n• After paying, reply to this DM with a **Rep screenshot** (payment proof).\n• Once verified, your **Seller** role will be restored if pending.`
-      )
-      .setColor(0xff0000)
-      .setImage("https://cdn.discordapp.com/attachments/1404360337079271504/1406132875551703113/tax-reminder.gif");
-
-    await user.send({ embeds: [embed] });
-    console.log(`📩 Sent tax DM to ${user.tag}`);
+    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
+      body: commands,
+    });
+    console.log("✅ Slash commands registered.");
   } catch (err) {
-    console.error(`❌ Failed to DM ${userId}:`, err.message);
+    console.error("❌ Failed to register commands:", err);
   }
 }
 
-/* ================= FORCE TAX ================= */
-async function handleForceTax(interaction) {
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-    await interaction.reply({ content: "❌ Admin only.", ephemeral: true });
-    return;
-  }
+/* =========================== HANDLERS =========================== */
 
-  const data = loadEconomy();
-  for (const [userId, info] of Object.entries(data.sellers)) {
-    if (info.owed > 0) {
-      await sendTaxDM(userId, info.owed);
-    }
-  }
-
-  await interaction.reply("📢 Forced tax reminders sent.");
-}
-
-/* ================= CRON JOB (Sunday 11am CST) ================= */
-cron.schedule("0 11 * * 0", async () => {
-  console.log("📢 Running weekly tax reminders...");
-  const data = loadEconomy();
-  for (const [userId, info] of Object.entries(data.sellers)) {
-    if (info.owed > 0) {
-      await sendTaxDM(userId, info.owed);
-    }
-  }
-}, { timezone: TIMEZONE });
-
-/* ================= HANDLERS ================= */
-client.on("ready", () => {
+client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   registerCommands();
 });
@@ -165,9 +109,53 @@ client.on("ready", () => {
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === "earn") await handleEarn(interaction);
-  if (interaction.commandName === "forcetax") await handleForceTax(interaction);
+  const data = loadData();
+
+  if (interaction.commandName === "earn") {
+    const customer = interaction.options.getUser("customer");
+    const amount = interaction.options.getInteger("amount");
+
+    if (!data.users[customer.id]) data.users[customer.id] = { earned: 0 };
+    data.users[customer.id].earned += amount;
+    saveData(data);
+
+    // Role auto assign
+    const member = await interaction.guild.members.fetch(customer.id);
+    if (!member.roles.cache.has(CLASSIC_ROLE)) {
+      await member.roles.add(CLASSIC_ROLE);
+    }
+
+    await interaction.reply({
+      content: `✅ Logged **${amount}** earnings for ${customer}.`,
+      ephemeral: true,
+    });
+  }
+
+  if (interaction.commandName === "tax") {
+    const target = interaction.options.getUser("user");
+    const embed = new EmbedBuilder()
+      .setColor(FT_BLUE)
+      .setTitle("📌 Tax Reminder")
+      .setDescription("Please remember to submit your weekly tax screenshot!")
+      .setImage(
+        "https://cdn.discordapp.com/attachments/1404360337079271504/1406132875551703113/tax-reminder.gif"
+      )
+      .setFooter({ text: "Forgotten Traders" });
+
+    try {
+      await target.send({ embeds: [embed] });
+      await interaction.reply({
+        content: `✅ Tax reminder sent to ${target.tag}.`,
+        ephemeral: true,
+      });
+    } catch (err) {
+      await interaction.reply({
+        content: `❌ Could not DM ${target.tag}.`,
+        ephemeral: true,
+      });
+    }
+  }
 });
 
-/* ================= LOGIN ================= */
-client.login(TOKEN);
+/* =========================== LOGIN =========================== */
+client.login(process.env.TOKEN);
