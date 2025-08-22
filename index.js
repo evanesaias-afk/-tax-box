@@ -1,317 +1,164 @@
-// index.js — Forgotten Traders Bot (with /checkspend)
-import fs from "fs";
-import path from "path";
-import "dotenv/config";
+// index.js — Tax + Earnings Bot
+import fs from 'fs';
+import path from 'path';
+import 'dotenv/config';
 import {
   Client,
   GatewayIntentBits,
+  Partials,
   SlashCommandBuilder,
-  REST,
   Routes,
+  REST,
   EmbedBuilder,
-  PermissionsBitField,
-} from "discord.js";
-import cron from "node-cron";
+  PermissionsBitField
+} from 'discord.js';
 
-/* ================= CONFIG ================= */
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages],
+  partials: [Partials.Channel]
+});
+
+/* =========================== CONFIG =========================== */
 const TOKEN = process.env.BOT_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-// Role IDs
-const SELLER_ROLE_ID   = "1396594120499400807";
-const CLASSIC_ROLE_ID  = "1404316149486714991";
-const VIP_ROLE_ID      = "1404317193667219611";
-const DELUXE_ROLE_ID   = "1404316641805734021";
-const PRESTIGE_ROLE_ID = "1404316734998970378";
-const ADMIN_ROLE_ID    = "1396593504603607153";
+const DATA_PATH = path.resolve('./economy.json');
+const SELLER_ROLE_ID = '1396594120499400807'; // seller role
+const ADMIN_ROLE_ID = '1396593504603607153';  // admin role
+const PAYPAL_USERNAME = 'Videogameenjoyer';
+const TAX_RATE = 0.25;
+const TAX_GIF = 'https://i.imgur.com/yourgif.gif'; // replace with your real GIF URL
 
-// Files
-const DATA_DIR = "data";
-const ECON_PATH = path.join(DATA_DIR, "economy.json");
-
-// Tax settings
-const TAX_PERCENT = 0.25;
-const TAX_GIF = "https://i.imgur.com/yourTaxGif.gif"; // replace with real gif
-const PAYPAL_NAME = "Videogameenjoyer";
-
-/* ================= ECONOMY HELPERS ================= */
-function ensureEconomy() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(ECON_PATH)) {
-    fs.writeFileSync(ECON_PATH, JSON.stringify({ users: {}, taxes: {} }, null, 2));
+/* =========================== STORAGE =========================== */
+function ensureData() {
+  if (!fs.existsSync(DATA_PATH)) {
+    fs.writeFileSync(DATA_PATH, JSON.stringify({ users: {} }, null, 2));
   }
 }
-function loadEconomy() {
-  ensureEconomy();
-  return JSON.parse(fs.readFileSync(ECON_PATH, "utf8"));
+function loadData() {
+  ensureData();
+  return JSON.parse(fs.readFileSync(DATA_PATH, 'utf8'));
 }
-function saveEconomy(d) {
-  fs.writeFileSync(ECON_PATH, JSON.stringify(d, null, 2));
-}
-
-/* ================= ADMIN CHECK ================= */
-function isAdmin(member) {
-  return (
-    member.roles.cache.has(ADMIN_ROLE_ID) ||
-    member.permissions.has(PermissionsBitField.Administrator)
-  );
+function saveData(data) {
+  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
 }
 
-/* ================= COMMANDS ================= */
+/* =========================== COMMANDS =========================== */
 const commands = [
   new SlashCommandBuilder()
-    .setName("earn")
-    .setDescription("Log a customer’s purchase/earnings.")
-    .addUserOption(opt =>
-      opt.setName("customer").setDescription("Customer to reward").setRequired(true)
-    )
-    .addIntegerOption(opt =>
-      opt.setName("amount").setDescription("Amount earned").setRequired(true)
-    )
-    .addUserOption(opt =>
-      opt.setName("seller").setDescription("Seller who made the trade").setRequired(true)
-    ),
+    .setName('earn')
+    .setDescription('Log an earning as a seller')
+    .addUserOption(opt => opt.setName('customer').setDescription('Customer who paid').setRequired(true))
+    .addIntegerOption(opt => opt.setName('amount').setDescription('Amount earned').setRequired(true)),
 
   new SlashCommandBuilder()
-    .setName("checkpend")
-    .setDescription("View all pending taxes (Admins only)."),
+    .setName('checkpend')
+    .setDescription('Check your pending tax balance'),
 
   new SlashCommandBuilder()
-    .setName("tax")
-    .setDescription("Log a tax entry (Admins only).")
-    .addUserOption(opt =>
-      opt.setName("seller").setDescription("Seller to tax").setRequired(true)
-    )
-    .addIntegerOption(opt =>
-      opt.setName("amount").setDescription("Amount owed").setRequired(true)
-    ),
+    .setName('tax')
+    .setDescription('Send tax reminders (Admin only)')
+].map(cmd => cmd.toJSON());
 
-  new SlashCommandBuilder()
-    .setName("paytax")
-    .setDescription("Mark a seller’s tax as paid (Admins only).")
-    .addUserOption(opt =>
-      opt.setName("seller").setDescription("Seller to clear tax for").setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("cleartax")
-    .setDescription("Clear ALL pending taxes (Admins only)."),
-
-  new SlashCommandBuilder()
-    .setName("checkspend")
-    .setDescription("Check how much a customer has spent in total. (Seller only)")
-    .addUserOption(opt =>
-      opt.setName("customer").setDescription("Customer to check").setRequired(true)
-    ),
-].map(c => c.toJSON());
-
-/* ================= CLIENT ================= */
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
-});
-
-/* ================= REGISTER ================= */
-const rest = new REST({ version: "10" }).setToken(TOKEN);
-async function registerCommands() {
+const rest = new REST({ version: '10' }).setToken(TOKEN);
+(async () => {
   try {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log("✅ Slash commands registered");
+    console.log('✅ Slash commands registered');
   } catch (err) {
-    console.error("❌ Command registration failed:", err);
+    console.error(err);
   }
-}
+})();
 
-/* ================= HANDLERS ================= */
-
-// /earn
-async function handleEarn(interaction) {
-  await interaction.deferReply();
-
-  if (!interaction.member.roles.cache.has(SELLER_ROLE_ID)) {
-    return interaction.editReply("❌ Only sellers can use this command.");
-  }
-
-  const customer = interaction.options.getUser("customer");
-  const amount   = interaction.options.getInteger("amount");
-  const seller   = interaction.options.getUser("seller");
-
-  if (!customer || !seller) return interaction.editReply("❌ Invalid customer or seller.");
-
-  let db = loadEconomy();
-  if (!db.users[customer.id]) db.users[customer.id] = { earned: 0 };
-  db.users[customer.id].earned += amount;
-
-  // tax
-  const taxAmount = Math.ceil(amount * TAX_PERCENT);
-  if (!db.taxes[seller.id]) db.taxes[seller.id] = 0;
-  db.taxes[seller.id] += taxAmount;
-
-  // remove seller role
-  const sellerMember = await interaction.guild.members.fetch(seller.id).catch(()=>null);
-  if (sellerMember) await sellerMember.roles.remove(SELLER_ROLE_ID).catch(()=>{});
-
-  saveEconomy(db);
-
-  // auto roles
-  const total = db.users[customer.id].earned;
-  const member = await interaction.guild.members.fetch(customer.id).catch(()=>null);
-  if (member) {
-    if (total >= 1000) await member.roles.add(PRESTIGE_ROLE_ID).catch(()=>{});
-    else if (total >= 500) await member.roles.add(DELUXE_ROLE_ID).catch(()=>{});
-    else if (total >= 250) await member.roles.add(VIP_ROLE_ID).catch(()=>{});
-    else if (total >= 100) await member.roles.add(CLASSIC_ROLE_ID).catch(()=>{});
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle("💰 Earnings Logged")
-    .setDescription(
-      `**Customer:** ${customer}\n` +
-      `**Seller:** ${seller}\n` +
-      `**Amount:** \`${amount}\`\n` +
-      `**Tax Added:** \`${taxAmount}\`\n` +
-      `**Customer Total Earned:** \`${total}\``
-    )
-    .setFooter({ text: "Forgotten Traders - /earn" });
-
-  return interaction.editReply({ embeds: [embed] });
-}
-
-// /checkpend
-async function handleCheckpend(interaction) {
-  await interaction.deferReply({ ephemeral: true });
-  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
-
-  const db = loadEconomy();
-  const taxes = db.taxes || {};
-  if (Object.keys(taxes).length === 0) return interaction.editReply("✅ No pending taxes.");
-
-  const embed = new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle("📊 Pending Taxes")
-    .setDescription(Object.entries(taxes).map(([uid, amt]) => `<@${uid}> owes \`${amt}\``).join("\n"))
-    .setFooter({ text: "Forgotten Traders - /checkpend" });
-
-  return interaction.editReply({ embeds: [embed] });
-}
-
-// /tax
-async function handleTax(interaction) {
-  await interaction.deferReply();
-  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
-
-  const seller = interaction.options.getUser("seller");
-  const amount = interaction.options.getInteger("amount");
-  if (!seller) return interaction.editReply("❌ Invalid seller.");
-
-  let db = loadEconomy();
-  if (!db.taxes[seller.id]) db.taxes[seller.id] = 0;
-  db.taxes[seller.id] += amount;
-  saveEconomy(db);
-
-  const sellerMember = await interaction.guild.members.fetch(seller.id).catch(()=>null);
-  if (sellerMember) await sellerMember.roles.remove(SELLER_ROLE_ID).catch(()=>{});
-
-  return interaction.editReply(`✅ Added \`${amount}\` tax for ${seller}.`);
-}
-
-// /paytax
-async function handlePaytax(interaction) {
-  await interaction.deferReply();
-  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
-
-  const seller = interaction.options.getUser("seller");
-  if (!seller) return interaction.editReply("❌ Invalid seller.");
-
-  let db = loadEconomy();
-  db.taxes[seller.id] = 0;
-  saveEconomy(db);
-
-  const sellerMember = await interaction.guild.members.fetch(seller.id).catch(()=>null);
-  if (sellerMember) await sellerMember.roles.add(SELLER_ROLE_ID).catch(()=>{});
-
-  return interaction.editReply(`✅ Cleared tax for ${seller} and restored Seller role.`);
-}
-
-// /cleartax
-async function handleCleartax(interaction) {
-  await interaction.deferReply();
-  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
-
-  let db = loadEconomy();
-  db.taxes = {};
-  saveEconomy(db);
-
-  return interaction.editReply("✅ All taxes cleared.");
-}
-
-// /checkspend
-async function handleCheckspend(interaction) {
-  await interaction.deferReply({ ephemeral: true });
-
-  if (!interaction.member.roles.cache.has(SELLER_ROLE_ID)) {
-    return interaction.editReply("❌ Only sellers can use this command.");
-  }
-
-  const customer = interaction.options.getUser("customer");
-  if (!customer) return interaction.editReply("❌ Invalid customer.");
-
-  let db = loadEconomy();
-  if (!db.users[customer.id]) db.users[customer.id] = { earned: 0 };
-  const total = db.users[customer.id].earned;
-
-  const embed = new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle("💳 Customer Spending")
-    .setDescription(`**Customer:** ${customer}\n**Total Spent:** \`${total}\` 🪙`)
-    .setFooter({ text: "Forgotten Traders - /checkspend" });
-
-  return interaction.editReply({ embeds: [embed] });
-}
-
-/* ================= INTERACTION ROUTER ================= */
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName === "earn") return handleEarn(interaction);
-  if (interaction.commandName === "checkpend") return handleCheckpend(interaction);
-  if (interaction.commandName === "tax") return handleTax(interaction);
-  if (interaction.commandName === "paytax") return handlePaytax(interaction);
-  if (interaction.commandName === "cleartax") return handleCleartax(interaction);
-  if (interaction.commandName === "checkspend") return handleCheckspend(interaction);
+/* =========================== HANDLERS =========================== */
+client.on('ready', () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-/* ================= SUNDAY TAX REMINDER ================= */
-cron.schedule("0 11 * * 0", async () => {
-  const guild = await client.guilds.fetch(GUILD_ID).catch(()=>null);
-  if (!guild) return;
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  const data = loadData();
 
-  const db = loadEconomy();
-  const taxes = db.taxes || {};
-  const members = await guild.members.fetch();
+  // /earn
+  if (interaction.commandName === 'earn') {
+    const seller = interaction.member;
+    if (!seller.roles.cache.has(SELLER_ROLE_ID)) {
+      return interaction.reply({ content: '❌ Only sellers can use this command.', ephemeral: true });
+    }
 
-  for (const [id, member] of members) {
-    if (!member.roles.cache.has(SELLER_ROLE_ID)) continue;
-    const owed = taxes[id] || 0;
-    if (owed <= 0) continue;
+    const customer = interaction.options.getUser('customer');
+    const amount = interaction.options.getInteger('amount');
+    const tax = Math.ceil(amount * TAX_RATE);
+
+    if (!data.users[seller.id]) {
+      data.users[seller.id] = { earned: 0, taxPending: 0, spent: 0 };
+    }
+
+    data.users[seller.id].earned += amount;
+    data.users[seller.id].taxPending += tax;
+    saveData(data);
 
     const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle("💸 Tax Reminder")
-      .setDescription(
-        `You currently owe **${owed} 🪙** in taxes to **Forgotten Traders**\n\n` +
-        `**How to pay**\n` +
-        `• PayPal: **${PAYPAL_NAME}**\n` +
-        `• After paying, reply to this DM with a **Rep screenshot**\n` +
-        `• Once verified, your **Seller role** will be restored if pending.`
-      )
-      .setImage(TAX_GIF)
-      .setFooter({ text: "Taxes are due!" });
+      .setColor(0x00AE86)
+      .setTitle('💰 Earnings Logged')
+      .setDescription(`**Customer:** ${customer}\n**Seller:** ${seller}\n**Amount:** \`${amount}\`\n**Tax Added:** \`${tax}\`\n**Total Earned:** \`${data.users[seller.id].earned}\``);
 
-    await member.send({ embeds: [embed] }).catch(()=>{});
+    return interaction.reply({ embeds: [embed] });
   }
-}, { timezone: "America/Chicago" });
 
-/* ================= START ================= */
-registerCommands();
+  // /checkpend
+  if (interaction.commandName === 'checkpend') {
+    const seller = interaction.member;
+    if (!seller.roles.cache.has(SELLER_ROLE_ID)) {
+      return interaction.reply({ content: '❌ Only sellers can use this command.', ephemeral: true });
+    }
+
+    const record = data.users[seller.id];
+    const pending = record ? record.taxPending : 0;
+
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('📊 Tax Balance')
+          .setDescription(`You currently owe **${pending} 🪙** in taxes to Forgotten Traders.`)
+      ],
+      ephemeral: true
+    });
+  }
+
+  // /tax
+  if (interaction.commandName === 'tax') {
+    if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+      return interaction.reply({ content: '❌ Only admins can use this command.', ephemeral: true });
+    }
+
+    for (const [userId, record] of Object.entries(data.users)) {
+      if (record.taxPending > 0) {
+        const guildMember = await interaction.guild.members.fetch(userId).catch(() => null);
+        if (!guildMember) continue;
+
+        try {
+          await guildMember.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0xFF0000)
+                .setTitle('💸 Tax Reminder')
+                .setDescription(`You currently owe **${record.taxPending} 🪙** in taxes to Forgotten Traders.\n\n**How to pay**\n• PayPal: \`${PAYPAL_USERNAME}\`\n• After paying, reply with a screenshot for verification.\n• Once verified, your Seller role will be restored.`)
+                .setImage(TAX_GIF)
+            ]
+          });
+
+          await guildMember.roles.remove(SELLER_ROLE_ID).catch(() => null);
+        } catch (err) {
+          console.error(`Failed to DM ${userId}:`, err);
+        }
+      }
+    }
+
+    return interaction.reply({ content: '✅ Tax reminders sent.', ephemeral: true });
+  }
+});
+
 client.login(TOKEN);
