@@ -1,4 +1,4 @@
-// index.js — Forgotten Traders Bot (Patched)
+// index.js — Forgotten Traders Bot (with /checkspend)
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
@@ -97,6 +97,13 @@ const commands = [
   new SlashCommandBuilder()
     .setName("cleartax")
     .setDescription("Clear ALL pending taxes (Admins only)."),
+
+  new SlashCommandBuilder()
+    .setName("checkspend")
+    .setDescription("Check how much a customer has spent in total. (Seller only)")
+    .addUserOption(opt =>
+      opt.setName("customer").setDescription("Customer to check").setRequired(true)
+    ),
 ].map(c => c.toJSON());
 
 /* ================= CLIENT ================= */
@@ -115,12 +122,9 @@ async function registerCommands() {
   }
 }
 
-/* ================= HANDLER ================= */
-client.on("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-});
+/* ================= HANDLERS ================= */
 
-/* -------- /earn -------- */
+// /earn
 async function handleEarn(interaction) {
   await interaction.deferReply();
 
@@ -132,28 +136,24 @@ async function handleEarn(interaction) {
   const amount   = interaction.options.getInteger("amount");
   const seller   = interaction.options.getUser("seller");
 
-  if (!customer || !seller) {
-    return interaction.editReply("❌ Invalid customer or seller.");
-  }
+  if (!customer || !seller) return interaction.editReply("❌ Invalid customer or seller.");
 
   let db = loadEconomy();
   if (!db.users[customer.id]) db.users[customer.id] = { earned: 0 };
   db.users[customer.id].earned += amount;
 
-  // calculate tax
+  // tax
   const taxAmount = Math.ceil(amount * TAX_PERCENT);
   if (!db.taxes[seller.id]) db.taxes[seller.id] = 0;
   db.taxes[seller.id] += taxAmount;
 
-  // remove seller role until tax is paid
+  // remove seller role
   const sellerMember = await interaction.guild.members.fetch(seller.id).catch(()=>null);
-  if (sellerMember) {
-    await sellerMember.roles.remove(SELLER_ROLE_ID).catch(()=>{});
-  }
+  if (sellerMember) await sellerMember.roles.remove(SELLER_ROLE_ID).catch(()=>{});
 
   saveEconomy(db);
 
-  // Auto role customers
+  // auto roles
   const total = db.users[customer.id].earned;
   const member = await interaction.guild.members.fetch(customer.id).catch(()=>null);
   if (member) {
@@ -178,70 +178,48 @@ async function handleEarn(interaction) {
   return interaction.editReply({ embeds: [embed] });
 }
 
-/* -------- /checkpend -------- */
+// /checkpend
 async function handleCheckpend(interaction) {
   await interaction.deferReply({ ephemeral: true });
-
-  if (!isAdmin(interaction.member)) {
-    return interaction.editReply("❌ Only admins can use this command.");
-  }
+  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
 
   const db = loadEconomy();
   const taxes = db.taxes || {};
-
-  if (Object.keys(taxes).length === 0) {
-    return interaction.editReply("✅ No pending taxes.");
-  }
+  if (Object.keys(taxes).length === 0) return interaction.editReply("✅ No pending taxes.");
 
   const embed = new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle("📊 Pending Taxes")
-    .setDescription(
-      Object.entries(taxes)
-        .map(([uid, amt]) => `<@${uid}> owes \`${amt}\``)
-        .join("\n")
-    )
+    .setDescription(Object.entries(taxes).map(([uid, amt]) => `<@${uid}> owes \`${amt}\``).join("\n"))
     .setFooter({ text: "Forgotten Traders - /checkpend" });
 
   return interaction.editReply({ embeds: [embed] });
 }
 
-/* -------- /tax -------- */
+// /tax
 async function handleTax(interaction) {
   await interaction.deferReply();
-
-  if (!isAdmin(interaction.member)) {
-    return interaction.editReply("❌ Only admins can use this command.");
-  }
+  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
 
   const seller = interaction.options.getUser("seller");
   const amount = interaction.options.getInteger("amount");
-
-  if (!seller) {
-    return interaction.editReply("❌ Invalid seller.");
-  }
+  if (!seller) return interaction.editReply("❌ Invalid seller.");
 
   let db = loadEconomy();
   if (!db.taxes[seller.id]) db.taxes[seller.id] = 0;
   db.taxes[seller.id] += amount;
   saveEconomy(db);
 
-  // remove seller role
   const sellerMember = await interaction.guild.members.fetch(seller.id).catch(()=>null);
-  if (sellerMember) {
-    await sellerMember.roles.remove(SELLER_ROLE_ID).catch(()=>{});
-  }
+  if (sellerMember) await sellerMember.roles.remove(SELLER_ROLE_ID).catch(()=>{});
 
   return interaction.editReply(`✅ Added \`${amount}\` tax for ${seller}.`);
 }
 
-/* -------- /paytax -------- */
+// /paytax
 async function handlePaytax(interaction) {
   await interaction.deferReply();
-
-  if (!isAdmin(interaction.member)) {
-    return interaction.editReply("❌ Only admins can use this command.");
-  }
+  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
 
   const seller = interaction.options.getUser("seller");
   if (!seller) return interaction.editReply("❌ Invalid seller.");
@@ -250,22 +228,16 @@ async function handlePaytax(interaction) {
   db.taxes[seller.id] = 0;
   saveEconomy(db);
 
-  // restore seller role
   const sellerMember = await interaction.guild.members.fetch(seller.id).catch(()=>null);
-  if (sellerMember) {
-    await sellerMember.roles.add(SELLER_ROLE_ID).catch(()=>{});
-  }
+  if (sellerMember) await sellerMember.roles.add(SELLER_ROLE_ID).catch(()=>{});
 
   return interaction.editReply(`✅ Cleared tax for ${seller} and restored Seller role.`);
 }
 
-/* -------- /cleartax -------- */
+// /cleartax
 async function handleCleartax(interaction) {
   await interaction.deferReply();
-
-  if (!isAdmin(interaction.member)) {
-    return interaction.editReply("❌ Only admins can use this command.");
-  }
+  if (!isAdmin(interaction.member)) return interaction.editReply("❌ Only admins can use this command.");
 
   let db = loadEconomy();
   db.taxes = {};
@@ -274,26 +246,50 @@ async function handleCleartax(interaction) {
   return interaction.editReply("✅ All taxes cleared.");
 }
 
-/* -------- Interaction Routing -------- */
+// /checkspend
+async function handleCheckspend(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  if (!interaction.member.roles.cache.has(SELLER_ROLE_ID)) {
+    return interaction.editReply("❌ Only sellers can use this command.");
+  }
+
+  const customer = interaction.options.getUser("customer");
+  if (!customer) return interaction.editReply("❌ Invalid customer.");
+
+  let db = loadEconomy();
+  if (!db.users[customer.id]) db.users[customer.id] = { earned: 0 };
+  const total = db.users[customer.id].earned;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle("💳 Customer Spending")
+    .setDescription(`**Customer:** ${customer}\n**Total Spent:** \`${total}\` 🪙`)
+    .setFooter({ text: "Forgotten Traders - /checkspend" });
+
+  return interaction.editReply({ embeds: [embed] });
+}
+
+/* ================= INTERACTION ROUTER ================= */
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-
   if (interaction.commandName === "earn") return handleEarn(interaction);
   if (interaction.commandName === "checkpend") return handleCheckpend(interaction);
   if (interaction.commandName === "tax") return handleTax(interaction);
   if (interaction.commandName === "paytax") return handlePaytax(interaction);
   if (interaction.commandName === "cleartax") return handleCleartax(interaction);
+  if (interaction.commandName === "checkspend") return handleCheckspend(interaction);
 });
 
-/* ================= SUNDAY DM REMINDER ================= */
+/* ================= SUNDAY TAX REMINDER ================= */
 cron.schedule("0 11 * * 0", async () => {
   const guild = await client.guilds.fetch(GUILD_ID).catch(()=>null);
   if (!guild) return;
 
   const db = loadEconomy();
   const taxes = db.taxes || {};
-
   const members = await guild.members.fetch();
+
   for (const [id, member] of members) {
     if (!member.roles.cache.has(SELLER_ROLE_ID)) continue;
     const owed = taxes[id] || 0;
