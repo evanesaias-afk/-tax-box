@@ -24,7 +24,7 @@ const CLASSIC_ROLE_ID  = "1404316149486714991";
 const VIP_ROLE_ID      = "1404317193667219611";
 const DELUXE_ROLE_ID   = "1404316641805734021";
 const PRESTIGE_ROLE_ID = "1404316734998970378";
-const ADMIN_ROLE_ID    = "YOUR_ADMIN_ROLE_ID"; // replace
+const ADMIN_ROLE_ID    = "1396593504603607153"; // ✅ your Admin role ID
 
 // Files
 const DATA_DIR = "data";
@@ -32,7 +32,7 @@ const ECON_PATH = path.join(DATA_DIR, "economy.json");
 
 // Tax settings
 const TAX_PERCENT = 0.25;
-const TAX_GIF = "https://i.imgur.com/yourTaxGif.gif"; // replace with your "Taxes Are Due" gif URL
+const TAX_GIF = "https://i.imgur.com/yourTaxGif.gif"; // replace with your "Taxes Are Due" gif
 const PAYPAL_NAME = "Videogameenjoyer";
 
 /* ================= ECONOMY HELPERS ================= */
@@ -48,6 +48,14 @@ function loadEconomy() {
 }
 function saveEconomy(d) {
   fs.writeFileSync(ECON_PATH, JSON.stringify(d, null, 2));
+}
+
+/* ================= ADMIN CHECK ================= */
+function isAdmin(member) {
+  return (
+    member.roles.cache.has(ADMIN_ROLE_ID) ||
+    member.permissions.has(PermissionsBitField.Administrator)
+  );
 }
 
 /* ================= COMMANDS ================= */
@@ -164,7 +172,7 @@ async function handleEarn(interaction) {
 
 /* -------- /checkpend -------- */
 async function handleCheckpend(interaction) {
-  if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+  if (!isAdmin(interaction.member)) {
     return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
   }
 
@@ -190,7 +198,7 @@ async function handleCheckpend(interaction) {
 
 /* -------- /tax -------- */
 async function handleTax(interaction) {
-  if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+  if (!isAdmin(interaction.member)) {
     return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
   }
 
@@ -213,7 +221,7 @@ async function handleTax(interaction) {
 
 /* -------- /paytax -------- */
 async function handlePaytax(interaction) {
-  if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+  if (!isAdmin(interaction.member)) {
     return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
   }
 
@@ -234,7 +242,7 @@ async function handlePaytax(interaction) {
 
 /* -------- /cleartax -------- */
 async function handleCleartax(interaction) {
-  if (!interaction.member.roles.cache.has(ADMIN_ROLE_ID)) {
+  if (!isAdmin(interaction.member)) {
     return interaction.reply({ content: "❌ Only admins can use this command.", ephemeral: true });
   }
 
