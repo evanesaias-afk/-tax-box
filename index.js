@@ -1,4 +1,4 @@
-// index.js — Economy + Tax Bot with Permissions
+// index.js — Economy + Tax Bot (Weekly Tax DMs)
 // package.json: { "type": "module", "scripts": { "start": "node index.js" } }
 
 import 'dotenv/config';
@@ -19,19 +19,12 @@ import {
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
-const SELLER_ROLE_ID = "1396594120499400807"; // hard-coded seller role
-const TAX_PERCENT = 25; // adjust if you want a different rate
-
-console.log("Token from env:", TOKEN ? `Loaded (${TOKEN.length} chars)` : "❌ Not loaded");
+const SELLER_ROLE_ID = "1396594120499400807";
+const TAX_PERCENT = 25;
 
 // =========================== CLIENT =========================== //
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages,
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel],
 });
 
@@ -96,10 +89,11 @@ client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
+// Handle commands
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  // ----- SELLER ONLY CHECK -----
+  // ----- SELLER ONLY -----
   if (['earn', 'checkspend'].includes(interaction.commandName)) {
     const member = await interaction.guild.members.fetch(interaction.user.id);
     if (!member.roles.cache.has(SELLER_ROLE_ID)) {
@@ -116,9 +110,14 @@ client.on('interactionCreate', async interaction => {
     const tax = Math.floor(amount * (TAX_PERCENT / 100));
     const afterTax = amount - tax;
 
-    // Save spend data
+    // Save spend + tax owed
     if (!spendData[customer.id]) spendData[customer.id] = 0;
     spendData[customer.id] += amount;
+
+    if (!spendData[seller.id]) spendData[seller.id] = { owed: 0, net: 0 };
+    spendData[seller.id].owed += tax;
+    spendData[seller.id].net += afterTax;
+
     saveData();
 
     await interaction.reply({
@@ -129,20 +128,6 @@ client.on('interactionCreate', async interaction => {
           .setColor('Blue')
       ],
     });
-
-    // DM seller about tax
-    try {
-      await seller.send({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('⚠️ Tax Notice')
-            .setDescription(`You earned **${amount}**, tax applied: **${tax}**\nNet: **${afterTax}**.`)
-            .setColor('Red')
-        ]
-      });
-    } catch (e) {
-      console.error(`❌ Could not DM seller ${seller.tag}`, e.message);
-    }
   }
 
   // ----- /checkspend -----
@@ -156,18 +141,16 @@ client.on('interactionCreate', async interaction => {
           .setDescription(`${customer} has spent a total of **${total}** coins.`)
           .setColor('Green')
       ],
-      ephemeral: true, // only seller sees result
+      ephemeral: true,
     });
   }
 
   // ----- /taxreport (Admins only) -----
   if (interaction.commandName === 'taxreport') {
     let totalTax = 0;
-    for (const customerId in spendData) {
-      const totalSpent = spendData[customerId];
-      totalTax += Math.floor(totalSpent * (TAX_PERCENT / 100));
+    for (const sellerId in spendData) {
+      if (spendData[sellerId].owed) totalTax += spendData[sellerId].owed;
     }
-
     await interaction.reply({
       embeds: [
         new EmbedBuilder()
@@ -175,10 +158,49 @@ client.on('interactionCreate', async interaction => {
           .setDescription(`Total tax collected so far: **${totalTax}** coins.`)
           .setColor('Purple')
       ],
-      ephemeral: true, // only admin sees
+      ephemeral: true,
     });
   }
 });
+
+// =========================== WEEKLY TAX JOB =========================== //
+function scheduleWeeklyTaxDM() {
+  setInterval(async () => {
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    const utcDay = now.getUTCDay();
+
+    // CST = UTC-5 (daylight saving), -6 (standard). Let's assume UTC-5 for summer.
+    const CST_HOUR = (utcHour - 5 + 24) % 24;
+
+    if (utcDay === 0 && CST_HOUR === 11 && now.getMinutes() === 0) {
+      console.log("📤 Sending weekly tax DMs...");
+      for (const sellerId in spendData) {
+        if (spendData[sellerId].owed > 0) {
+          try {
+            const user = await client.users.fetch(sellerId);
+            await user.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle('📅 Weekly Tax Report')
+                  .setDescription(`You owe **${spendData[sellerId].owed}** in tax.\nYour net after tax this week: **${spendData[sellerId].net}**.`)
+                  .setColor('Orange')
+              ]
+            });
+          } catch (e) {
+            console.error(`❌ Could not DM seller ${sellerId}`, e.message);
+          }
+          // reset after sending
+          spendData[sellerId].owed = 0;
+          spendData[sellerId].net = 0;
+        }
+      }
+      saveData();
+    }
+  }, 60 * 1000); // check every 1 minute
+}
+
+client.once('ready', scheduleWeeklyTaxDM);
 
 // =========================== LOGIN =========================== //
 client.login(TOKEN);
