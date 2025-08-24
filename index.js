@@ -1,4 +1,5 @@
-// index.js — Economy + Tax Bot (fixed customer/seller separation)
+// index.js — Economy + Tax Bot with Weekly Tax DMs
+// package.json: { "type": "module", "scripts": { "start": "node index.js" } }
 
 import 'dotenv/config';
 import fs from 'fs';
@@ -75,6 +76,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 // =========================== HANDLERS =========================== //
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  scheduleWeeklyTaxDM();
 });
 
 client.on('interactionCreate', async interaction => {
@@ -150,6 +152,45 @@ client.on('interactionCreate', async interaction => {
     });
   }
 });
+
+// =========================== WEEKLY TAX DM =========================== //
+function scheduleWeeklyTaxDM() {
+  setInterval(async () => {
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    const utcDay = now.getUTCDay();
+
+    // CST = UTC-5 during daylight saving
+    const CST_HOUR = (utcHour - 5 + 24) % 24;
+
+    if (utcDay === 0 && CST_HOUR === 11 && now.getMinutes() === 0) {
+      console.log("📤 Sending weekly tax DMs...");
+      for (const sellerId in spendData.sellers) {
+        const sellerData = spendData.sellers[sellerId];
+        if (sellerData.owed > 0 || sellerData.net > 0) {
+          try {
+            const user = await client.users.fetch(sellerId);
+            await user.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle('📅 Weekly Tax Report')
+                  .setDescription(`This week:\nTax owed: **${sellerData.owed}**\nNet after tax: **${sellerData.net}**`)
+                  .setColor('Orange')
+              ]
+            });
+            console.log(`✅ Sent weekly tax DM to ${user.tag}`);
+          } catch (e) {
+            console.error(`❌ Could not DM seller ${sellerId}`, e.message);
+          }
+          // reset after sending
+          spendData.sellers[sellerId].owed = 0;
+          spendData.sellers[sellerId].net = 0;
+        }
+      }
+      saveData();
+    }
+  }, 60 * 1000); // check every minute
+}
 
 // =========================== LOGIN =========================== //
 client.login(TOKEN);
